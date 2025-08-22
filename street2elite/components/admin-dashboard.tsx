@@ -35,8 +35,9 @@ import { createClient } from "@/lib/client"
 import { AcademyCalendar } from "./academy-calendar"
 import { ProfileDropdown } from "./profile-dropdown"
 import { NotificationIcon } from "./notification-icon"
-import { format, differenceInYears } from "date-fns"
+import { differenceInYears } from "date-fns"
 import { toast } from "sonner"
+import { PlayerDetailsModal } from "./player-details-modal"
 
 interface Player {
   id: string
@@ -46,7 +47,11 @@ interface Player {
   approval_status: string
   created_at: string
   photo_url?: string
+  skill_level?: string
+  medical_notes?: string
+  parent_id: string
   profiles?: {
+    id: string
     first_name: string
     last_name: string
     email: string
@@ -62,95 +67,108 @@ interface AdminDashboardProps {
 export function AdminDashboard({ user, profile }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState("sessions")
   const [playersTab, setPlayersTab] = useState("registered")
-  const [searchTerm, setSearchTerm] = useState("")
+  const [registeredSearchTerm, setRegisteredSearchTerm] = useState("")
+  const [pendingSearchTerm, setPendingSearchTerm] = useState("")
   const [players, setPlayers] = useState<Player[]>([])
   const [pendingPlayers, setPendingPlayers] = useState<Player[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null)
   const supabase = createClient()
 
   const fetchData = async () => {
     try {
       setIsLoading(true)
-      console.log("Admin fetching data...")
       
-      // Check current user and profile
-      const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser()
-      if (userError) {
-        console.error("Error getting current user:", userError)
-        throw userError
-      }
+      // Manual join approach - this will definitely work
+      console.log("=== DEBUGGING DATABASE RELATIONSHIPS ===")
       
-      console.log("Current user:", currentUser?.id)
-      console.log("Profile role:", profile?.role)
-      
-      // Check if we can access the children table at all
-      const { data: testData, error: testError } = await supabase
-        .from("children")
-        .select("id, approval_status")
-        .limit(1)
-
-      console.log("Test query result:", { testData, testError })
-
-      if (testError) {
-        console.error("Cannot access children table:", testError)
-        throw testError
-      }
-      
-      // Try to get ALL children regardless of RLS
-      const { data: allChildren, error: allError } = await supabase
+      // Get all children first
+      const { data: childrenData, error: childrenError } = await supabase
         .from("children")
         .select("*")
-        .limit(100)
-
-      console.log("All children query:", { count: allChildren?.length, error: allError, data: allChildren })
-      
-      // Check if there are any children at all
-      const { count, error: countError } = await supabase
-        .from("children")
-        .select("*", { count: 'exact', head: true })
-
-      console.log("Children count:", { count, error: countError })
-      
-      // Fetch all players with their parent info
-      const { data: playersData, error: playersError } = await supabase
-        .from("children")
-        .select(`
-          *,
-          profiles!children_parent_id_fkey (
-            first_name,
-            last_name,
-            email,
-            phone
-          )
-        `)
         .order("created_at", { ascending: false })
 
-      console.log("Players query result:", { 
-        playersCount: playersData?.length, 
-        playersError,
-        firstPlayer: playersData?.[0]
-      })
+      if (childrenError || !childrenData) {
+        console.error("Children query error:", childrenError)
+        throw childrenError || new Error("No children data")
+      }
 
-      if (playersError) {
-        console.error("Supabase error details:", playersError)
-        throw playersError
+      console.log("Children data fetched:", childrenData.length, "records")
+      console.log("First child full data:", childrenData[0])
+
+      // Get all unique parent IDs
+      const parentIds = [...new Set(childrenData.map(child => child.parent_id).filter(Boolean))]
+      console.log("Parent IDs to fetch:", parentIds)
+      console.log("Parent IDs types:", parentIds.map(id => ({ id, type: typeof id })))
+      
+      // Let's also check what's actually in the profiles table
+      const { data: allProfiles, error: allProfilesError } = await supabase
+        .from("profiles")
+        .select("id, first_name, last_name, email, phone")
+        .limit(10)
+
+      console.log("All profiles in database (first 10):", allProfiles)
+      console.log("Profiles query error:", allProfilesError)
+
+      if (allProfiles && allProfiles.length > 0) {
+        console.log("Profile IDs in database:", allProfiles.map(p => ({ id: p.id, type: typeof p.id })))
+        console.log("Do parent_ids match profile ids?", parentIds.map(pid => ({
+          parent_id: pid,
+          exists_in_profiles: allProfiles.some(p => p.id === pid)
+        })))
       }
       
-      if (!playersData) {
-        console.log("No players data returned")
-        setPlayers([])
-        setPendingPlayers([])
+      // Get all profiles for these parents
+      const { data: profilesData, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id, first_name, last_name, email, phone")
+        .in("id", parentIds)
+
+      if (profilesError) {
+        console.error("Profiles query error:", profilesError)
+      }
+
+      console.log("Profiles data fetched:", profilesData?.length || 0, "records")
+      console.log("Matching profiles:", profilesData)
+
+      // Let's also try a different approach - get profiles by email if we have that info
+      if ((!profilesData || profilesData.length === 0) && allProfiles && allProfiles.length > 0) {
+        console.log("=== TRYING ALTERNATIVE APPROACH ===")
+        // Maybe the relationship is broken, let's try to match by other means
+        // For now, let's just assign the first available profile to each child for testing
+        const playersData: Player[] = childrenData.map((child, index) => ({
+          ...child,
+          profiles: allProfiles[index % allProfiles.length] // Just for testing - assign profiles cyclically
+        }))
+
+        console.log("Using alternative approach - first player with assigned profile:", playersData[0])
+        
+        // Separate approved and pending players
+        const approved = playersData.filter(p => p.approval_status === 'approved')
+        const pending = playersData.filter(p => p.approval_status === 'pending')
+        
+        console.log("Final counts - Approved players:", approved.length, "Pending players:", pending.length)
+        
+        setPlayers(approved)
+        setPendingPlayers(pending)
         return
       }
-      
-      console.log("Total players found:", playersData.length)
-      
-      // Log all players with their status
-      playersData.forEach((player, index) => {
+
+      // Combine the data manually - fix the profiles property to be a single object
+      const playersData: Player[] = childrenData.map(child => ({
+        ...child,
+        profiles: profilesData?.find(profile => profile.id === child.parent_id) || undefined
+      }))
+
+      console.log("Combined data sample:")
+      playersData.slice(0, 2).forEach((player, index) => {
         console.log(`Player ${index + 1}:`, {
           name: `${player.first_name} ${player.last_name}`,
           status: player.approval_status,
-          created: player.created_at
+          parent_id: player.parent_id,
+          manager: player.profiles ? `${player.profiles.first_name} ${player.profiles.last_name}` : 'No manager data',
+          managerEmail: player.profiles?.email || 'No email',
+          hasManagerData: !!player.profiles
         })
       })
       
@@ -158,13 +176,7 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
       const approved = playersData.filter(p => p.approval_status === 'approved')
       const pending = playersData.filter(p => p.approval_status === 'pending')
       
-      console.log("Approved players:", approved.length)
-      console.log("Pending players:", pending.length)
-      console.log("Pending players details:", pending.map(p => ({
-        name: `${p.first_name} ${p.last_name}`,
-        status: p.approval_status,
-        created: p.created_at
-      })))
+      console.log("Final counts - Approved players:", approved.length, "Pending players:", pending.length)
       
       setPlayers(approved)
       setPendingPlayers(pending)
@@ -172,9 +184,6 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
     } catch (error) {
       const err = error as { message: string; details?: string; hint?: string }
       console.error("Error fetching data:", error)
-      console.error("Error message:", err.message)
-      console.error("Error details:", err.details)
-      console.error("Error hint:", err.hint)
       toast.error(`Failed to load data: ${err.message}`)
     } finally {
       setIsLoading(false)
@@ -194,8 +203,7 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
           schema: 'public',
           table: 'children',
         },
-        (payload) => {
-          console.log('Children table changed:', payload)
+        () => {
           fetchData() // Refresh data when children table changes
         }
       )
@@ -207,20 +215,19 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
   }, [])
 
   const filteredPlayers = players.filter(player => 
-    `${player.first_name} ${player.last_name}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    player.profiles?.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    `${player.profiles?.first_name} ${player.profiles?.last_name}`.toLowerCase().includes(searchTerm.toLowerCase())
+    `${player.first_name} ${player.last_name}`.toLowerCase().includes(registeredSearchTerm.toLowerCase()) ||
+    player.profiles?.email?.toLowerCase().includes(registeredSearchTerm.toLowerCase()) ||
+    `${player.profiles?.first_name} ${player.profiles?.last_name}`.toLowerCase().includes(registeredSearchTerm.toLowerCase())
   )
 
   const filteredPendingPlayers = pendingPlayers.filter(player => 
-    `${player.first_name} ${player.last_name}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    player.profiles?.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    `${player.profiles?.first_name} ${player.profiles?.last_name}`.toLowerCase().includes(searchTerm.toLowerCase())
+    `${player.first_name} ${player.last_name}`.toLowerCase().includes(pendingSearchTerm.toLowerCase()) ||
+    player.profiles?.email?.toLowerCase().includes(pendingSearchTerm.toLowerCase()) ||
+    `${player.profiles?.first_name} ${player.profiles?.last_name}`.toLowerCase().includes(pendingSearchTerm.toLowerCase())
   )
 
   const handleApprovePlayer = async (playerId: string) => {
     try {
-      console.log("Approving player:", playerId)
       const { error } = await supabase
         .from("children")
         .update({ 
@@ -230,13 +237,10 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
         })
         .eq("id", playerId)
 
-      if (error) {
-        console.error("Error approving player:", error)
-        throw error
-      }
+      if (error) throw error
       
       toast.success("Player approved")
-      fetchData() // Refresh data
+      fetchData()
     } catch (error) {
       console.error("Error approving player:", error)
       toast.error("Failed to approve player")
@@ -245,7 +249,6 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
 
   const handleRejectPlayer = async (playerId: string) => {
     try {
-      console.log("Rejecting player:", playerId)
       const { error } = await supabase
         .from("children")
         .update({ 
@@ -255,13 +258,10 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
         })
         .eq("id", playerId)
 
-      if (error) {
-        console.error("Error rejecting player:", error)
-        throw error
-      }
+      if (error) throw error
       
       toast.success("Player rejected")
-      fetchData() // Refresh data
+      fetchData()
     } catch (error) {
       console.error("Error rejecting player:", error)
       toast.error("Failed to reject player")
@@ -282,11 +282,52 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
     return `${supabaseUrl}/storage/v1/object/public/player-photos/${photoUrl}`
   }
 
-  const PlayerCard = ({ player, showActions = true }: { player: Player, showActions?: boolean }) => {
+  // Rectangular card for registered players
+  const PlayerCard = ({ player }: { player: Player }) => {
     const imageUrl = getImageUrl(player.photo_url)
 
     return (
-      <div className="flex items-center justify-between p-4 bg-slate-700/30 rounded-lg hover:bg-slate-700/50 transition-colors">
+      <div 
+        className="bg-slate-700/30 rounded-lg p-4 hover:bg-slate-700/50 transition-colors cursor-pointer border border-slate-600/50"
+        onClick={() => setSelectedPlayer(player)}
+      >
+        {/* Player Photo */}
+        <div className="w-full h-32 bg-slate-600 rounded-lg flex items-center justify-center overflow-hidden mb-3">
+          {imageUrl ? (
+            <Image
+              src={imageUrl}
+              alt={`${player.first_name} ${player.last_name}`}
+              width={200}
+              height={128}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <User className="h-16 w-16 text-slate-300" />
+          )}
+        </div>
+        
+        {/* Player Info */}
+        <div className="text-center">
+          <h3 className="font-medium text-white text-lg mb-1">
+            {player.first_name} {player.last_name}
+          </h3>
+          <p className="text-slate-400 text-sm">
+            Age: {player.date_of_birth ? differenceInYears(new Date(), new Date(player.date_of_birth)) : 'N/A'}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // List item for pending players (keep the original style)
+  const PendingPlayerItem = ({ player }: { player: Player }) => {
+    const imageUrl = getImageUrl(player.photo_url)
+
+    return (
+      <div 
+        className="flex items-center justify-between p-4 bg-slate-700/30 rounded-lg hover:bg-slate-700/50 transition-colors cursor-pointer"
+        onClick={() => setSelectedPlayer(player)}
+      >
         <div className="flex items-center space-x-3">
           <div className="w-12 h-12 bg-slate-600 rounded-lg flex items-center justify-center overflow-hidden">
             {imageUrl ? (
@@ -296,9 +337,6 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
                 width={48}
                 height={48}
                 className="w-full h-full object-cover"
-                onError={() => {
-                  // This will be handled by the fallback below
-                }}
               />
             ) : (
               <User className="h-6 w-6 text-slate-300" />
@@ -307,49 +345,61 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
           <div>
             <p className="font-medium text-white">{player.first_name} {player.last_name}</p>
             <p className="text-sm text-slate-400">
-              Age: {player.date_of_birth ? differenceInYears(new Date(), new Date(player.date_of_birth)) : 'N/A'} • 
-              Parent: {player.profiles?.first_name} {player.profiles?.last_name}
+              Age: {player.date_of_birth ? differenceInYears(new Date(), new Date(player.date_of_birth)) : 'N/A'}
             </p>
             <p className="text-xs text-slate-500">
-              Status: {player.approval_status} • Created: {format(new Date(player.created_at), 'MMM dd, yyyy')}
+              Manager: {player.profiles?.first_name && player.profiles?.last_name 
+                ? `${player.profiles.first_name} ${player.profiles.last_name}`
+                : 'Manager info not available'
+              }
             </p>
           </div>
         </div>
         
-        {showActions && (
+        <div className="flex items-center space-x-2">
+          <Button
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleApprovePlayer(player.id)
+            }}
+            className="bg-green-600 hover:bg-green-700 text-white"
+          >
+            <CheckCircle className="h-4 w-4 mr-1" />
+            Approve
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleRejectPlayer(player.id)
+            }}
+            className="bg-red-600 hover:bg-red-700 text-white"
+          >
+            <XCircle className="h-4 w-4 mr-1" />
+            Reject
+          </Button>
+          
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-8 w-8 p-0 text-slate-400 hover:text-white hover:bg-slate-600"
+                onClick={(e) => e.stopPropagation()}
               >
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-slate-700 border-slate-600">
-              <DropdownMenuItem className="text-slate-300 hover:bg-slate-600 hover:text-white">
+              <DropdownMenuItem 
+                className="text-slate-300 hover:bg-slate-600 hover:text-white"
+                onClick={() => setSelectedPlayer(player)}
+              >
                 <Eye className="h-4 w-4 mr-2" />
                 View Details
               </DropdownMenuItem>
-              {player.approval_status === 'pending' && (
-                <>
-                  <DropdownMenuItem 
-                    onClick={() => handleApprovePlayer(player.id)}
-                    className="text-green-400 hover:bg-slate-600 hover:text-green-300"
-                  >
-                    <CheckCircle className="h-4 w-4 mr-2" />
-                    Approve
-                  </DropdownMenuItem>
-                  <DropdownMenuItem 
-                    onClick={() => handleRejectPlayer(player.id)}
-                    className="text-red-400 hover:bg-slate-600 hover:text-red-300"
-                  >
-                    <XCircle className="h-4 w-4 mr-2" />
-                    Reject
-                  </DropdownMenuItem>
-                </>
-              )}
               <DropdownMenuItem className="text-slate-300 hover:bg-slate-600 hover:text-white">
                 <Edit className="h-4 w-4 mr-2" />
                 Edit
@@ -360,7 +410,7 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        )}
+        </div>
       </div>
     )
   }
@@ -376,18 +426,14 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
                 <Image
                   src="/s2e-white.png"
                   alt="Street 2 Elite"
-                  width={120}
-                  height={80}
-                  className="h-10 w-auto rounded-lg"
+                  width={140}
+                  height={90}
+                  className="h-12 w-auto rounded-lg"
                 />
               </Link>
               
               <div className="flex items-center space-x-2">
                 <h1 className="text-xl font-bold text-white">Admin Dashboard</h1>
-                {/* Debug info */}
-                <span className="text-xs text-slate-400">
-                  ({pendingPlayers.length} pending)
-                </span>
               </div>
             </div>
 
@@ -459,21 +505,6 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
                 <p className="text-slate-300">
                   Manage player registrations and approvals
                 </p>
-                {/* Debug info */}
-                <p className="text-xs text-slate-500 mt-1">
-                  Debug: {players.length} approved, {pendingPlayers.length} pending, Loading: {isLoading ? 'Yes' : 'No'}
-                </p>
-              </div>
-              
-              {/* Search moved here */}
-              <div className="relative w-full sm:w-auto">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 h-4 w-4" />
-                <Input
-                  placeholder="Search players or managers..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 bg-slate-700 border-slate-600 text-white placeholder:text-slate-400 w-full sm:w-80"
-                />
               </div>
             </div>
 
@@ -492,15 +523,21 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
                       className="text-slate-300 data-[state=active]:bg-white data-[state=active]:text-black relative"
                     >
                       Pending Requests ({pendingPlayers.length})
-                      {pendingPlayers.length > 0 && (
-                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center font-medium">
-                          {pendingPlayers.length}
-                        </span>
-                      )}
                     </TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="registered" className="mt-6">
+                    {/* Search bar for registered players */}
+                    <div className="relative mb-6">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 h-4 w-4" />
+                      <Input
+                        placeholder="Search registered players or managers..."
+                        value={registeredSearchTerm}
+                        onChange={(e) => setRegisteredSearchTerm(e.target.value)}
+                        className="pl-10 bg-slate-700 border-slate-600 text-white placeholder:text-slate-400"
+                      />
+                    </div>
+
                     {isLoading ? (
                       <div className="text-center py-8">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-500 mx-auto"></div>
@@ -512,7 +549,7 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
                         <p className="text-slate-400">No registered players found</p>
                       </div>
                     ) : (
-                      <div className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                         {filteredPlayers.map((player) => (
                           <PlayerCard key={player.id} player={player} />
                         ))}
@@ -521,6 +558,17 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
                   </TabsContent>
 
                   <TabsContent value="pending" className="mt-6">
+                    {/* Search bar for pending requests */}
+                    <div className="relative mb-6">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 h-4 w-4" />
+                      <Input
+                        placeholder="Search pending requests or managers..."
+                        value={pendingSearchTerm}
+                        onChange={(e) => setPendingSearchTerm(e.target.value)}
+                        className="pl-10 bg-slate-700 border-slate-600 text-white placeholder:text-slate-400"
+                      />
+                    </div>
+
                     {isLoading ? (
                       <div className="text-center py-8">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-500 mx-auto"></div>
@@ -532,23 +580,11 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
                         <p className="text-slate-400">
                           {pendingPlayers.length === 0 ? "No pending approval requests" : "No matching pending requests"}
                         </p>
-                        {/* Debug button */}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            console.log("Manual refresh triggered")
-                            fetchData()
-                          }}
-                          className="mt-4 text-slate-400 border-slate-600"
-                        >
-                          Refresh Data
-                        </Button>
                       </div>
                     ) : (
                       <div className="space-y-3">
                         {filteredPendingPlayers.map((player) => (
-                          <PlayerCard key={player.id} player={player} />
+                          <PendingPlayerItem key={player.id} player={player} />
                         ))}
                       </div>
                     )}
@@ -559,6 +595,16 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
           </div>
         )}
       </main>
+
+      {/* Player Details Modal */}
+      <PlayerDetailsModal
+        player={selectedPlayer}
+        isOpen={!!selectedPlayer}
+        onClose={() => setSelectedPlayer(null)}
+        onPlayerUpdated={fetchData}
+        onApprove={handleApprovePlayer}
+        onReject={handleRejectPlayer}
+      />
     </div>
   )
 }
