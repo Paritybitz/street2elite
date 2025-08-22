@@ -15,7 +15,7 @@ import { SessionModal } from "./session-modal"
 interface AcademyCalendarProps {
   user: unknown
   profile: unknown
-  children: unknown[]
+  playersList: unknown[]
   isAdmin?: boolean
 }
 

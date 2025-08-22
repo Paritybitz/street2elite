@@ -52,10 +52,10 @@ const formSchema = z.object({
 interface AddPlayerModalProps {
   open: boolean
   onClose: () => void
-  onPlayerAdded: () => void
+  onSuccess: (newPlayer: any) => void  // Changed from onPlayerAdded to onSuccess to match parent usage
 }
 
-export function AddPlayerModal({ open, onClose, onPlayerAdded }: AddPlayerModalProps) {
+export function AddPlayerModal({ open, onClose, onSuccess }: AddPlayerModalProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [selectedPhoto, setSelectedPhoto] = useState<File | null>(null)
   const [selectedMedicalFile, setSelectedMedicalFile] = useState<File | null>(null)
@@ -202,7 +202,9 @@ export function AddPlayerModal({ open, onClose, onPlayerAdded }: AddPlayerModalP
 
       toast.success("Player added successfully!")
       handleClose()
-      onPlayerAdded()
+      
+      // Pass the created child data to the parent
+      onSuccess(child)
       
     } catch (error: any) {
       console.error("Error adding player:", error)
@@ -251,15 +253,12 @@ export function AddPlayerModal({ open, onClose, onPlayerAdded }: AddPlayerModalP
               </label>
               <Input
                 {...register("fullName")}
-                placeholder="Enter player's full name"
-                className="bg-slate-700/50 border-slate-600 text-white placeholder:text-slate-400"
+                placeholder="e.g., John Smith"
+                className="bg-slate-700 border-slate-600 text-white placeholder:text-slate-400"
                 autoFocus
-                disabled={isLoading}
               />
               {errors.fullName && (
-                <p className="text-sm font-medium text-red-400">
-                  {errors.fullName.message}
-                </p>
+                <p className="text-red-400 text-sm">{errors.fullName.message}</p>
               )}
             </div>
 
@@ -268,15 +267,12 @@ export function AddPlayerModal({ open, onClose, onPlayerAdded }: AddPlayerModalP
                 Date of Birth *
               </label>
               <Input
-                {...register("dateOfBirth")}
                 type="date"
-                className="bg-slate-700/50 border-slate-600 text-white"
-                disabled={isLoading}
+                {...register("dateOfBirth")}
+                className="bg-slate-700 border-slate-600 text-white"
               />
               {errors.dateOfBirth && (
-                <p className="text-sm font-medium text-red-400">
-                  {errors.dateOfBirth.message}
-                </p>
+                <p className="text-red-400 text-sm">{errors.dateOfBirth.message}</p>
               )}
             </div>
 
@@ -284,125 +280,128 @@ export function AddPlayerModal({ open, onClose, onPlayerAdded }: AddPlayerModalP
               <label className="text-sm font-medium text-slate-200">
                 Player Photo *
               </label>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {!selectedPhoto ? (
                   <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-600 border-dashed rounded-lg cursor-pointer bg-slate-700/30 hover:bg-slate-700/50 transition-colors">
                     <div className="flex flex-col items-center justify-center pt-5 pb-6">
                       <Camera className="w-8 h-8 mb-2 text-slate-400" />
-                      <p className="mb-2 text-sm text-slate-400">
-                        <span className="font-semibold">Click to upload photo</span>
+                      <p className="text-sm text-slate-400">
+                        <span className="font-medium">Click to upload</span> player photo
                       </p>
-                      <p className="text-xs text-slate-500">JPG, PNG (MAX. 5MB)</p>
+                      <p className="text-xs text-slate-500">JPG or PNG (max 5MB)</p>
                     </div>
                     <input
                       type="file"
                       className="hidden"
-                      accept=".jpg,.jpeg,.png"
+                      accept="image/jpeg,image/jpg,image/png"
                       onChange={handlePhotoChange}
-                      disabled={isLoading}
                     />
                   </label>
                 ) : (
-                  <div className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg border border-slate-600">
-                    <span className="text-sm text-slate-300 truncate">
-                      📷 {selectedPhoto.name}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={removePhoto}
-                      disabled={isLoading}
-                      className="h-6 w-6 p-0 text-slate-400 hover:text-white"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
+                  <div className="relative">
+                    <div className="flex items-center justify-between p-3 bg-slate-700 rounded-lg">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-10 h-10 bg-teal-600 rounded flex items-center justify-center">
+                          <Camera className="w-5 h-5 text-white" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-white">{selectedPhoto.name}</p>
+                          <p className="text-xs text-slate-400">
+                            {(selectedPhoto.size / (1024 * 1024)).toFixed(2)} MB
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={removePhoto}
+                        className="text-slate-400 hover:text-red-400 hover:bg-slate-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                 )}
+                {errors.playerPhoto && (
+                  <p className="text-red-400 text-sm">{errors.playerPhoto.message}</p>
+                )}
               </div>
-              <p className="text-sm text-slate-400">
-                Upload a recent photo of the player for identification.
-              </p>
-              {errors.playerPhoto && (
-                <p className="text-sm font-medium text-red-400">
-                  {errors.playerPhoto.message}
-                </p>
-              )}
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-200">
                 Medical Form *
               </label>
-              <div className="space-y-2">
+              <p className="text-xs text-slate-400 mb-2">
+                Upload doctor's physical. Required once per year.
+              </p>
+              <div className="space-y-3">
                 {!selectedMedicalFile ? (
                   <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-600 border-dashed rounded-lg cursor-pointer bg-slate-700/30 hover:bg-slate-700/50 transition-colors">
                     <div className="flex flex-col items-center justify-center pt-5 pb-6">
                       <Upload className="w-8 h-8 mb-2 text-slate-400" />
-                      <p className="mb-2 text-sm text-slate-400">
-                        <span className="font-semibold">Click to upload</span>
+                      <p className="text-sm text-slate-400">
+                        <span className="font-medium">Click to upload</span> medical form
                       </p>
-                      <p className="text-xs text-slate-500">PDF, JPG, PNG (MAX. 5MB)</p>
+                      <p className="text-xs text-slate-500">PDF, JPG or PNG (max 5MB)</p>
                     </div>
                     <input
                       type="file"
                       className="hidden"
-                      accept=".pdf,.jpg,.jpeg,.png"
+                      accept=".pdf,image/jpeg,image/jpg,image/png"
                       onChange={handleMedicalFileChange}
-                      disabled={isLoading}
                     />
                   </label>
                 ) : (
-                  <div className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg border border-slate-600">
-                    <span className="text-sm text-slate-300 truncate">
-                      📄 {selectedMedicalFile.name}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={removeMedicalFile}
-                      disabled={isLoading}
-                      className="h-6 w-6 p-0 text-slate-400 hover:text-white"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
+                  <div className="relative">
+                    <div className="flex items-center justify-between p-3 bg-slate-700 rounded-lg">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-10 h-10 bg-blue-600 rounded flex items-center justify-center">
+                          <Upload className="w-5 h-5 text-white" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-white">{selectedMedicalFile.name}</p>
+                          <p className="text-xs text-slate-400">
+                            {(selectedMedicalFile.size / (1024 * 1024)).toFixed(2)} MB
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={removeMedicalFile}
+                        className="text-slate-400 hover:text-red-400 hover:bg-slate-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                 )}
+                {errors.medicalFile && (
+                  <p className="text-red-400 text-sm">{errors.medicalFile.message}</p>
+                )}
               </div>
-              <p className="text-sm text-slate-400">
-                Upload doctor's physical. Required once per year.
-              </p>
-              {errors.medicalFile && (
-                <p className="text-sm font-medium text-red-400">
-                  {errors.medicalFile.message}
-                </p>
-              )}
             </div>
 
-            <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 gap-2 pt-4">
+            <div className="flex justify-end space-x-3 pt-4">
               <Button
                 type="button"
                 variant="ghost"
                 onClick={handleClose}
                 disabled={isLoading}
-                className="text-slate-300 hover:text-white"
+                className="text-slate-300 hover:text-white hover:bg-slate-700"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={!isFormValid || isLoading}
-                className="bg-teal-600 hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  "Save Player"
-                )}
+                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save Player
               </Button>
             </div>
           </form>

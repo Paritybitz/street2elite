@@ -44,7 +44,7 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
   const [selectedPlayer, setSelectedPlayer] = useState<any>(null)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [playerToDelete, setPlayerToDelete] = useState<any>(null)
-  const [players, setPlayers] = useState(initialPlayers)
+  const [players, setPlayers] = useState(initialPlayers || [])
   const [isDeleting, setIsDeleting] = useState(false)
   const [playerPhotos, setPlayerPhotos] = useState<{ [key: string]: string }>({})
   const supabase = createClient()
@@ -55,7 +55,7 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
       const photos: { [key: string]: string } = {}
       
       for (const player of players) {
-        if (player.photo_url) {
+        if (player?.photo_url) {
           try {
             const { data } = supabase.storage
               .from('player-photos')
@@ -78,8 +78,22 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
     }
   }, [players, supabase])
 
-  const handlePlayerAdded = (newPlayer: any) => {
-    setPlayers([...players, newPlayer])
+  const handlePlayerAdded = async (newPlayer: any) => {
+    // Refresh the players list from the database to get the complete data
+    try {
+      const { data: updatedPlayers, error } = await supabase
+        .from('children')
+        .select('*')
+        .eq('parent_id', user.id)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setPlayers(updatedPlayers || [])
+    } catch (error) {
+      console.error('Error refreshing players:', error)
+      // Fallback to adding the new player to the existing list
+      setPlayers([...players, newPlayer])
+    }
     setShowAddPlayerModal(false)
   }
 
@@ -102,10 +116,10 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
       if (error) throw error
 
       setPlayers(players.filter(p => p.id !== playerToDelete.id))
-      toast.success('Player removed successfully')
+      toast.success('Player deleted successfully')
     } catch (error: any) {
       console.error('Error deleting player:', error)
-      toast.error('Failed to remove player')
+      toast.error('Failed to delete player')
     } finally {
       setIsDeleting(false)
       setShowDeleteDialog(false)
@@ -116,37 +130,42 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'approved':
-        return <Badge className="bg-green-600 text-white"><CheckCircle className="h-3 w-3 mr-1" />Approved</Badge>
+        return <Badge className="bg-green-600 text-white"><CheckCircle className="w-3 h-3 mr-1" />Approved</Badge>
       case 'rejected':
-        return <Badge className="bg-red-600 text-white"><XCircle className="h-3 w-3 mr-1" />Rejected</Badge>
+        return <Badge className="bg-red-600 text-white"><XCircle className="w-3 h-3 mr-1" />Rejected</Badge>
       default:
-        return <Badge className="bg-amber-600 text-white"><Clock className="h-3 w-3 mr-1" />Pending Approval</Badge>
+        return <Badge className="bg-yellow-600 text-white"><Clock className="w-3 h-3 mr-1" />Pending Approval</Badge>
     }
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-black">
-      {/* Header */}
       <header className="border-b border-slate-700 bg-slate-800/50 backdrop-blur-sm">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <Link href="/" className="flex items-center space-x-3 hover:opacity-80 transition-opacity">
-              <Image
-                src="/s2e-white.png"
-                alt="Street 2 Elite"
-                width={120}
-                height={80}
-                className="h-10 w-auto rounded-lg"
-              />
-            </Link>
+            <div className="flex items-center space-x-6">
+              <Link href="/" className="flex items-center space-x-3 hover:opacity-80 transition-opacity">
+                <Image
+                  src="/s2e-white.png"
+                  alt="Street 2 Elite"
+                  width={120}
+                  height={80}
+                  className="h-10 w-auto rounded-lg"
+                />
+              </Link>
+              
+              <div className="flex items-center space-x-2">
+                <h1 className="text-xl font-bold text-white">Parent Dashboard</h1>
+              </div>
+            </div>
 
             <div className="flex items-center space-x-6">
-              <nav className="flex items-center space-x-6">
-                <Link href="/sessions" className="text-slate-300 hover:text-white transition-colors">
-                  Sessions
-                </Link>
-                <Link href="/dashboard" className="text-slate-300 hover:text-white transition-colors">
-                  Players
+              <nav className="flex items-center space-x-4">
+                <Link 
+                  href="/sessions" 
+                  className="text-slate-300 hover:text-white transition-colors"
+                >
+                  <Calendar className="h-5 w-5" />
                 </Link>
               </nav>
               
@@ -185,7 +204,15 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
               ) : (
                 <div className="space-y-4">
                   {players.map((player) => {
-                    const age = differenceInYears(new Date(), new Date(player.date_of_birth))
+                    // Add safety checks for player data
+                    if (!player || !player.id) {
+                      console.warn('Invalid player data:', player)
+                      return null
+                    }
+
+                    const age = player.date_of_birth 
+                      ? differenceInYears(new Date(), new Date(player.date_of_birth))
+                      : 'Unknown'
                     const isPending = player.approval_status === 'pending'
                     
                     return (
@@ -202,25 +229,25 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
                             {playerPhotos[player.id] ? (
                               <img
                                 src={playerPhotos[player.id]}
-                                alt={`${player.first_name} ${player.last_name}`}
+                                alt={`${player.first_name || ''} ${player.last_name || ''}`}
                                 className="h-12 w-12 rounded-lg object-cover"
                               />
                             ) : (
                               <div className="h-12 w-12 rounded-lg bg-teal-600 flex items-center justify-center text-white font-semibold">
-                                {player.first_name[0]}{player.last_name[0]}
+                                {(player.first_name?.[0] || '?')}{(player.last_name?.[0] || '?')}
                               </div>
                             )}
                           </div>
                           <div>
                             <h3 className="text-white font-semibold">
-                              {player.first_name} {player.last_name}
+                              {player.first_name || 'Unknown'} {player.last_name || 'Player'}
                             </h3>
                             <p className="text-slate-400 text-sm">{age} years old</p>
                           </div>
                         </div>
                         
                         <div className="flex items-center space-x-3">
-                          {getStatusBadge(player.approval_status)}
+                          {getStatusBadge(player.approval_status || 'pending')}
                           
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -254,12 +281,12 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
                         </div>
                       </div>
                     )
-                  })}
+                  }).filter(Boolean)} {/* Filter out null entries */}
                   
                   <Button 
                     onClick={() => setShowAddPlayerModal(true)}
-                    variant="outline" 
-                    className="w-full border-slate-600 text-slate-300 hover:text-white hover:bg-slate-700"
+                    variant="outline"
+                    className="w-full border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white"
                   >
                     <Plus className="h-4 w-4 mr-2" />
                     Register Another Player
@@ -287,29 +314,22 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {upcomingBookings.slice(0, 3).map((booking) => (
+                  {upcomingBookings.map((booking) => (
                     <div key={booking.id} className="flex items-center justify-between p-4 bg-slate-700/50 rounded-lg border border-slate-600">
                       <div>
-                        <h4 className="text-white font-semibold">{booking.sessions?.title}</h4>
+                        <h3 className="text-white font-semibold">{booking.sessions?.title}</h3>
                         <p className="text-slate-400 text-sm">
-                          {format(new Date(booking.sessions?.date), 'EEEE, MMMM d')} at {booking.sessions?.start_time}
+                          {booking.sessions?.date && format(new Date(booking.sessions.date), 'MMM dd, yyyy')} at {booking.sessions?.start_time}
                         </p>
                         <p className="text-slate-400 text-sm">{booking.sessions?.location}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-white font-semibold">£{booking.sessions?.price}</p>
-                        <Badge className="bg-green-600 text-white">Confirmed</Badge>
+                        <Badge className={booking.payment_status === 'paid' ? 'bg-green-600' : 'bg-yellow-600'}>
+                          {booking.payment_status === 'paid' ? 'Paid' : 'Unpaid'}
+                        </Badge>
                       </div>
                     </div>
                   ))}
-                  
-                  {upcomingBookings.length > 3 && (
-                    <Button asChild variant="outline" className="w-full border-slate-600 text-slate-300 hover:text-white hover:bg-slate-700">
-                      <Link href="/sessions">
-                        View All Sessions
-                      </Link>
-                    </Button>
-                  )}
                 </div>
               )}
             </CardContent>
@@ -317,43 +337,46 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
         </div>
       </main>
 
-      {/* Modals */}
+      {/* Add Player Modal */}
       <AddPlayerModal
         open={showAddPlayerModal}
         onClose={() => setShowAddPlayerModal(false)}
-        onPlayerAdded={handlePlayerAdded}
+        onSuccess={handlePlayerAdded}
       />
 
-      <EditPlayerModal
-        open={showEditPlayerModal}
-        onClose={() => {
-          setShowEditPlayerModal(false)
-          setSelectedPlayer(null)
-        }}
-        player={selectedPlayer}
-        onPlayerUpdated={handlePlayerUpdated}
-      />
+      {/* Edit Player Modal */}
+      {selectedPlayer && (
+        <EditPlayerModal
+          open={showEditPlayerModal}
+          onClose={() => {
+            setShowEditPlayerModal(false)
+            setSelectedPlayer(null)
+          }}
+          player={selectedPlayer}
+          onSuccess={handlePlayerUpdated}
+        />
+      )}
 
-      {/* Delete Confirmation */}
+      {/* Delete Confirmation Dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent className="bg-slate-800 border-slate-700">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-white">Delete Player?</AlertDialogTitle>
+            <AlertDialogTitle className="text-white">Delete Player</AlertDialogTitle>
             <AlertDialogDescription className="text-slate-300">
-              Are you sure you want to remove {playerToDelete?.first_name} {playerToDelete?.last_name}? 
-              This action cannot be undone and will cancel any upcoming bookings.
+              Are you sure you want to delete {playerToDelete?.first_name} {playerToDelete?.last_name}? 
+              This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="border-slate-600 text-slate-300 hover:bg-slate-700">
+            <AlertDialogCancel className="bg-slate-700 text-slate-300 hover:bg-slate-600 border-slate-600">
               Cancel
             </AlertDialogCancel>
-            <AlertDialogAction
+            <AlertDialogAction 
               onClick={handleDeletePlayer}
               disabled={isDeleting}
               className="bg-red-600 hover:bg-red-700"
             >
-              {isDeleting ? "Deleting..." : "Delete Player"}
+              {isDeleting ? 'Deleting...' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
