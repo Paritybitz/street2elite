@@ -1,9 +1,9 @@
-import { createClient } from "@/lib/server"
-import { SessionsHeader } from "@/components/sessions-header"
-import { AcademyCalendar } from "@/components/academy-calendar"
 import { redirect } from "next/navigation"
+import { createClient } from "@/lib/server"
+import { AcademyCalendar } from "@/components/academy-calendar"
+import { SessionsHeader } from "@/components/sessions-header"
 
-export default async function SessionsPage() {
+export default async function CalendarPage() {
   const supabase = await createClient()
 
   const {
@@ -20,7 +20,7 @@ export default async function SessionsPage() {
   // Check if user is admin
   const isAdmin = profile?.role === 'admin'
 
-  // Fetch user's children for booking
+  // Fetch user's children for booking (parents only)
   const { data: children } = await supabase
     .from("children")
     .select("*")

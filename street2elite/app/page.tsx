@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { FloatingElements } from "@/components/floating-elements"
 import Link from "next/link"
+import Image from "next/image"
 
 export default function LandingPage() {
   const [isScrolled, setIsScrolled] = useState(false)
@@ -29,7 +30,16 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-8">
-              <span className="text-white font-bold text-lg font-mono">Street 2 Elite</span>
+              {/* Logo replacing text */}
+              <Link href="/" className="hover:opacity-80 transition-opacity">
+                <Image
+                  src="/s2e-white.png"
+                  alt="Street 2 Elite"
+                  width={120}
+                  height={80}
+                  className="h-10 w-auto rounded-lg"
+                />
+              </Link>
               <div className="hidden md:flex space-x-6">
                 <Link href="/merch" className="text-white/80 hover:text-white transition-colors font-mono">
                   Merch
@@ -40,11 +50,13 @@ export default function LandingPage() {
               </div>
             </div>
             <div className="flex items-center space-x-4">
-              <a href="#" className="text-white/80 hover:text-white transition-colors font-mono">
+              {/* Functional Sign In button */}
+              <Link href="/auth/login" className="text-white/80 hover:text-white transition-colors font-mono">
                 Sign In
-              </a>
-              <Button className="bg-gradient-to-r from-teal-500 to-blue-600 hover:from-teal-400 hover:to-blue-500 text-white px-6 py-2 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-300 font-mono font-bold">
-                Join Now
+              </Link>
+              {/* Functional Join Now button */}
+              <Button asChild className="bg-gradient-to-r from-teal-500 to-blue-600 hover:from-teal-400 hover:to-blue-500 text-white px-6 py-2 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-300 font-mono font-bold">
+                <Link href="/auth/signup">Join Now</Link>
               </Button>
             </div>
           </div>
@@ -56,10 +68,10 @@ export default function LandingPage() {
           {/* Logo & Brand Name */}
           <div className="mb-12 animate-fade-up">
             <h1 className="text-6xl md:text-8xl font-black text-white mb-4 tracking-wider font-mono uppercase">
-              Street{" "}
+              Street{""}
               <span className="text-7xl md:text-9xl text-teal-400 inline-block transform hover:scale-110 transition-transform duration-300 font-black">
                 2
-              </span>{" "}
+              </span>{""}
               <span className="relative inline-block">
                 <span className="text-white decoration-yellow-400 decoration-4 underline-offset-8 animate-glow font-black">
                   Elite
@@ -67,16 +79,15 @@ export default function LandingPage() {
               </span>
             </h1>
             <p className="text-xl md:text-2xl text-white/80 max-w-2xl mx-auto leading-relaxed font-mono">
-              Professional soccer academy where champions are made.
-              <br />
+
               <span className="text-teal-400 font-bold">Elite training. Elite results.</span>
             </p>
           </div>
 
-          {/* CTA Button */}
+          {/* CTA Button - Functional */}
           <div className="animate-fade-up" style={{ animationDelay: "0.5s" }}>
-            <Button className="bg-gradient-to-r from-teal-500 to-blue-600 hover:from-teal-400 hover:to-blue-500 text-white text-xl px-12 py-4 rounded-full shadow-2xl hover:shadow-teal-500/25 hover:scale-110 transition-all duration-300 animate-wiggle-once font-mono font-bold uppercase tracking-wide">
-              Join Now
+            <Button asChild className="bg-gradient-to-r from-teal-500 to-blue-600 hover:from-teal-400 hover:to-blue-500 text-white text-xl px-12 py-4 rounded-full shadow-2xl hover:shadow-teal-500/25 hover:scale-110 transition-all duration-300 animate-wiggle-once font-mono font-bold uppercase tracking-wide">
+              <Link href="/auth/signup">Join Now</Link>
             </Button>
           </div>
 

@@ -1,32 +1,29 @@
-import type React from "react"
 import type { Metadata } from "next"
 import { GeistSans } from "geist/font/sans"
-import { GeistMono } from "geist/font/mono"
+import { ToastProvider } from "@/components/toast-provider"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Street 2 Elite - Soccer Academy",
-  description: "Professional soccer academy where champions are made. Elite training, elite results.",
-  generator: "v0.app",
+  title: "Street 2 Elite",
+  description: "Professional football academy training sessions",
+  icons: {
+    icon: "/s2e-white.png",
+    shortcut: "/s2e-white.png",
+    apple: "/s2e-white.png",
+  },
 }
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode
-}>) {
+}) {
   return (
-    <html lang="en">
-      <head>
-        <style>{`
-html {
-  font-family: ${GeistSans.style.fontFamily};
-  --font-sans: ${GeistSans.variable};
-  --font-mono: ${GeistMono.variable};
-}
-        `}</style>
-      </head>
-      <body>{children}</body>
+    <html lang="en" className={GeistSans.className}>
+      <body className="antialiased" suppressHydrationWarning={true}>
+        {children}
+        <ToastProvider />
+      </body>
     </html>
   )
 }
