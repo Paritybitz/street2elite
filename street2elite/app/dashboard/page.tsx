@@ -2,6 +2,7 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/server"
 import { AdminDashboard } from "@/components/admin-dashboard"
 import { ParentDashboard } from "@/components/parent-dashboard"
+import { fetchUpcomingBookings } from "@/lib/bookings"
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -32,25 +33,14 @@ export default async function DashboardPage() {
       .eq("parent_id", user.id)
       .order("created_at", { ascending: true })
 
-    const { data: upcomingBookings } = await supabase
-      .from("bookings")
-      .select(`
-        *,
-        sessions(*),
-        children(first_name, last_name)
-      `)
-      .eq("parent_id", user.id)
-      .eq("status", "confirmed")
-      .gte("sessions.date", new Date().toISOString().split("T")[0])
-      .order("sessions.date", { ascending: true })
-      .limit(5)
+    const upcomingBookings = await fetchUpcomingBookings(supabase, user.id).catch(() => [])
 
     return (
       <ParentDashboard 
         user={user} 
         profile={profile} 
         players={players || []} 
-        upcomingBookings={upcomingBookings || []} 
+        upcomingBookings={upcomingBookings} 
       />
     )
   }

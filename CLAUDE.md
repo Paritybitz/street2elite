@@ -59,18 +59,19 @@ There is also a legacy `/admin` route with stats widgets — it is not linked fr
 - `medical-forms` — annual doctor's physicals (path: `{user_id}/{child_id}/medical.{ext}`)
 
 ### Key Components
-- `AcademyCalendar` — FullCalendar wrapper used by both roles. `isAdmin=true` enables drag-to-reschedule, resize, date-click to create, and event-click to edit. `isAdmin=false` is currently read-only (event click shows a toast, not a booking flow).
-- `SessionModal` — admin create/edit form for sessions. "Delete" soft-deletes by setting `is_active: false`. Has a "View Participants" panel that switches the modal content.
+- `AcademyCalendar` — FullCalendar wrapper used by both roles. Events show `registered/capacity`. `isAdmin=true` enables drag-to-reschedule, resize, date-click to create, and event-click to edit. `isAdmin=false` opens `SessionBookingModal` on event click (✓ marks sessions the parent has a player in).
+- `SessionBookingModal` — parent-facing: register / cancel approved players for a session. Logic lives in `lib/bookings.ts` (`registerChild`, `cancelBooking`, `fetchSessionRoster`, `fetchUpcomingBookings`). Cancel is a soft cancel (`status='cancelled'`); re-registering revives the row because `(session_id, child_id)` is unique.
+- `SessionModal` — admin create/edit form for sessions. "Delete" soft-deletes by setting `is_active: false`. "View Participants" switches to a live roster (child, age, parent contact, payment status, remove button).
 - `AddPlayerModal` — zod-validated form requiring full name, DOB, a photo upload, and a medical form upload. All three Supabase operations (insert child row, upload photo, upload medical form) happen sequentially on submit.
 - `PlayerDetailsModal` — admin view of a single player with approve/reject actions.
 
 ### Realtime
-Both `AdminDashboard` and `AcademyCalendar` subscribe to Supabase Realtime on their respective tables (`children` and `sessions`) and re-fetch data on any change. Channels are cleaned up on unmount.
+`AdminDashboard` subscribes to `children`; `AcademyCalendar` to `sessions` and `bookings`; `ParentDashboard` to its own `bookings` and `sessions`; the admin roster to `bookings` for one session. All re-fetch on any change and clean up on unmount. `bookings`/`sessions`/`children` must be in the `supabase_realtime` publication — see `scripts/bookings_realtime_and_rules.sql`, which also enforces capacity and eligibility in a database trigger.
 
 ## Known Issues
 
 1. **Debug console.logs** — `admin-dashboard.tsx` and `session-modal.tsx` have leftover `console.log` statements from debugging the Supabase FK join between `children.parent_id` and `profiles.id`. There is also a fallback in `AdminDashboard.fetchData()` that cyclically assigns profiles to children when the join returns empty — this is a workaround, not intended behavior.
 
-2. **Parent booking flow is incomplete** — The `/sessions/[id]/book` page and `BookingForm` component exist but are unreachable from the `AcademyCalendar` (parents get a toast on event click instead of being routed to book). Payments (`payment_status` field) are also not yet wired to any payment processor.
+2. **Payments aren't wired up** — Parents can register players for sessions from the calendar (`SessionBookingModal`), but `payment_status` stays `'pending'` (free sessions are `'paid'`); there is no payment processor. The older `/sessions/[id]/book` page and `BookingForm` are unreachable and redirect to a page that doesn't exist.
 
 3. **Merch store is static** — `app/merch/page.tsx` has hardcoded items and non-functional "Add to Cart" buttons.

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -22,12 +22,13 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Plus, Calendar, MoreVertical, Edit, Trash2, Clock, CheckCircle, XCircle } from "lucide-react"
 import Link from "next/link"
-import { format } from "date-fns"
+import { format, parseISO } from "date-fns"
 import { differenceInYears } from "date-fns"
 import { ProfileDropdown } from "@/components/profile-dropdown"
 import { AddPlayerModal } from "@/components/add-player-modal"
 import { EditPlayerModal } from "@/components/edit-player-modal"
 import { createClient } from "@/lib/client"
+import { cancelBooking, fetchUpcomingBookings, type UpcomingBooking } from "@/lib/bookings"
 import { toast } from "sonner"
 import Image from "next/image"
 
@@ -47,7 +48,59 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
   const [players, setPlayers] = useState(initialPlayers || [])
   const [isDeleting, setIsDeleting] = useState(false)
   const [playerPhotos, setPlayerPhotos] = useState<{ [key: string]: string }>({})
+  const [bookings, setBookings] = useState<UpcomingBooking[]>(upcomingBookings || [])
+  const [bookingToCancel, setBookingToCancel] = useState<UpcomingBooking | null>(null)
+  const [isCancelling, setIsCancelling] = useState(false)
   const supabase = createClient()
+
+  const refreshBookings = useCallback(async () => {
+    try {
+      setBookings(await fetchUpcomingBookings(supabase, user.id))
+    } catch (error) {
+      console.error("Error refreshing bookings:", error)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id])
+
+  // Live updates: my bookings change (booked elsewhere, removed by an admin) or a session is
+  // rescheduled / deleted -> refresh the list.
+  useEffect(() => {
+    const channel = supabase
+      .channel("parent-dashboard-bookings")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bookings", filter: `parent_id=eq.${user.id}` },
+        () => refreshBookings()
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "sessions" }, () => refreshBookings())
+      .subscribe()
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshBookings()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible)
+      supabase.removeChannel(channel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id])
+
+  const handleCancelBooking = async () => {
+    if (!bookingToCancel) return
+    setIsCancelling(true)
+    try {
+      await cancelBooking(supabase, bookingToCancel.id)
+      toast.success("Registration cancelled")
+      await refreshBookings()
+    } catch (error: any) {
+      toast.error(error.message || "Failed to cancel registration")
+    } finally {
+      setIsCancelling(false)
+      setBookingToCancel(null)
+    }
+  }
 
   // Load player photos
   useEffect(() => {
@@ -302,7 +355,7 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
               <CardTitle className="text-white">Upcoming Training Sessions</CardTitle>
             </CardHeader>
             <CardContent>
-              {!upcomingBookings || upcomingBookings.length === 0 ? (
+              {bookings.length === 0 ? (
                 <div className="text-center py-8">
                   <p className="text-slate-400 mb-4">No training sessions booked</p>
                   <Button asChild className="bg-teal-600 hover:bg-teal-700">
@@ -314,22 +367,47 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {upcomingBookings.map((booking) => (
-                    <div key={booking.id} className="flex items-center justify-between p-4 bg-slate-700/50 rounded-lg border border-slate-600">
+                  {bookings.map((booking) => (
+                    <div key={booking.id} className="flex items-center justify-between gap-4 p-4 bg-slate-700/50 rounded-lg border border-slate-600">
                       <div>
-                        <h3 className="text-white font-semibold">{booking.sessions?.title}</h3>
+                        <h3 className="text-white font-semibold">{booking.sessions.title}</h3>
+                        {booking.children && (
+                          <p className="text-teal-400 text-sm">
+                            {booking.children.first_name} {booking.children.last_name}
+                          </p>
+                        )}
                         <p className="text-slate-400 text-sm">
-                          {booking.sessions?.date && format(new Date(booking.sessions.date), 'MMM dd, yyyy')} at {booking.sessions?.start_time}
+                          {format(parseISO(booking.sessions.date), "EEE d MMM yyyy")} · {booking.sessions.start_time.slice(0, 5)}–
+                          {booking.sessions.end_time.slice(0, 5)}
                         </p>
-                        <p className="text-slate-400 text-sm">{booking.sessions?.location}</p>
+                        <p className="text-slate-400 text-sm">{booking.sessions.location}</p>
                       </div>
-                      <div className="text-right">
+                      <div className="flex flex-col items-end gap-2">
                         <Badge className={booking.payment_status === 'paid' ? 'bg-green-600' : 'bg-yellow-600'}>
                           {booking.payment_status === 'paid' ? 'Paid' : 'Unpaid'}
                         </Badge>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setBookingToCancel(booking)}
+                          className="text-red-400 hover:text-red-300 hover:bg-slate-700 h-7 px-2"
+                        >
+                          Cancel
+                        </Button>
                       </div>
                     </div>
                   ))}
+
+                  <Button
+                    asChild
+                    variant="outline"
+                    className="w-full border-slate-600 text-slate-300 hover:bg-slate-700 hover:text-white"
+                  >
+                    <Link href="/sessions">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Book Another Session
+                    </Link>
+                  </Button>
                 </div>
               )}
             </CardContent>
@@ -356,6 +434,31 @@ export function ParentDashboard({ user, profile, players: initialPlayers, upcomi
           onSuccess={handlePlayerUpdated}
         />
       )}
+
+      {/* Cancel Booking Dialog */}
+      <AlertDialog open={!!bookingToCancel} onOpenChange={(isOpen) => !isOpen && setBookingToCancel(null)}>
+        <AlertDialogContent className="bg-slate-800 border-slate-700">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">Cancel Registration</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-300">
+              Cancel {bookingToCancel?.children?.first_name}&apos;s place in {bookingToCancel?.sessions.title}? The spot
+              will be released for other players.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="bg-slate-700 text-slate-300 hover:bg-slate-600 border-slate-600">
+              Keep Registration
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleCancelBooking}
+              disabled={isCancelling}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {isCancelling ? 'Cancelling...' : 'Cancel Registration'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>

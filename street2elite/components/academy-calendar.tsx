@@ -6,16 +6,18 @@ import dayGridPlugin from "@fullcalendar/daygrid"
 import timeGridPlugin from "@fullcalendar/timegrid"
 import listPlugin from "@fullcalendar/list"
 import interactionPlugin from "@fullcalendar/interaction"
-import type { EventClickArg, EventDropArg } from "@fullcalendar/core"
+import type { EventClickArg, EventContentArg, EventDropArg } from "@fullcalendar/core"
 import { createClient } from "@/lib/client"
 import { Card, CardContent } from "@/components/ui/card"
 import { toast } from "sonner"
 import { SessionModal } from "./session-modal"
+import { SessionBookingModal, type BookablePlayer, type BookableSession } from "./session-booking-modal"
 
 interface AcademyCalendarProps {
-  user: unknown
+  user: { id: string }
   profile: unknown
-  playersList: unknown[]
+  /** The signed-in parent's players. Unused for admins. */
+  players?: BookablePlayer[]
   isAdmin?: boolean
 }
 
@@ -27,6 +29,7 @@ interface SessionEvent {
   backgroundColor: string
   borderColor: string
   textColor: string
+  classNames: string[]
   extendedProps: {
     location: string
     coach_name: string
@@ -36,6 +39,8 @@ interface SessionEvent {
     description?: string
     booked_count: number
     available_spots: number
+    /** The signed-in parent has at least one player registered for this session. */
+    registered: boolean
   }
 }
 
@@ -47,20 +52,19 @@ interface EventResizeInfo {
   revert: () => void
 }
 
-export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
+export function AcademyCalendar({ user, players = [], isAdmin = false }: AcademyCalendarProps) {
   const [events, setEvents] = useState<SessionEvent[]>([])
   const [selectedSession, setSelectedSession] = useState<unknown>(null)
   const [showSessionModal, setShowSessionModal] = useState(false)
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
+  // Parents: which session's booking modal is open. Derived from `events`, so it stays live.
+  const [bookingSessionId, setBookingSessionId] = useState<string | null>(null)
   const calendarRef = useRef<FullCalendar>(null)
   const supabase = createClient()
 
-  // Fetch sessions from Supabase
+  // Fetch sessions + registration counts from Supabase
   const fetchSessions = async () => {
     try {
-      console.log("Fetching sessions...")
-      
-      // Get all active sessions first
       const { data: sessions, error: sessionsError } = await supabase
         .from("sessions")
         .select("*")
@@ -68,24 +72,18 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
         .gte("date", new Date().toISOString().split("T")[0])
         .order("date", { ascending: true })
 
-      if (sessionsError) {
-        console.error("Error fetching sessions:", sessionsError)
-        throw sessionsError
-      }
-
-      console.log("Sessions fetched:", sessions)
+      if (sessionsError) throw sessionsError
 
       if (!sessions || sessions.length === 0) {
-        console.log("No sessions found")
         setEvents([])
         return
       }
 
-      // Get booking counts for each session
-      const sessionIds = sessions.map(s => s.id)
+      // Confirmed registrations for these sessions (all parents' — counts must be global)
+      const sessionIds = sessions.map((s) => s.id)
       const { data: bookings, error: bookingsError } = await supabase
         .from("bookings")
-        .select("session_id")
+        .select("session_id, parent_id")
         .in("session_id", sessionIds)
         .eq("status", "confirmed")
 
@@ -94,19 +92,16 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
         // Continue without booking data rather than failing completely
       }
 
-      console.log("Bookings fetched:", bookings)
-
-      // Calculate availability and format for FullCalendar
       const formattedEvents: SessionEvent[] = sessions.map((session) => {
-        const bookedCount = bookings?.filter(b => b.session_id === session.id).length || 0
+        const sessionBookings = bookings?.filter((b) => b.session_id === session.id) ?? []
+        const bookedCount = sessionBookings.length
         const availableSpots = session.max_participants - bookedCount
-        
-        console.log(`Session ${session.title}: ${bookedCount} booked, ${availableSpots} available`)
-        
+        const registered = !isAdmin && sessionBookings.some((b) => b.parent_id === user.id)
+
         // Color coding based on availability
         let backgroundColor = "#10b981" // Green - available
         let borderColor = "#059669"
-        
+
         if (availableSpots <= 0) {
           backgroundColor = "#ef4444" // Red - full
           borderColor = "#dc2626"
@@ -115,20 +110,15 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
           borderColor = "#d97706"
         }
 
-        // Create proper datetime strings
-        const startDateTime = `${session.date}T${session.start_time}`
-        const endDateTime = `${session.date}T${session.end_time}`
-
-        console.log(`Session ${session.title}: ${startDateTime} to ${endDateTime}`)
-
         return {
           id: session.id,
           title: session.title,
-          start: startDateTime,
-          end: endDateTime,
+          start: `${session.date}T${session.start_time}`,
+          end: `${session.date}T${session.end_time}`,
           backgroundColor,
           borderColor,
           textColor: "#ffffff",
+          classNames: registered ? ["fc-event-registered"] : [],
           extendedProps: {
             location: session.location,
             coach_name: session.coach_name,
@@ -138,11 +128,11 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
             description: session.description,
             booked_count: bookedCount,
             available_spots: availableSpots,
-          }
+            registered,
+          },
         }
       })
 
-      console.log("Formatted events:", formattedEvents)
       setEvents(formattedEvents)
     } catch (error) {
       console.error("Error fetching sessions:", error)
@@ -150,39 +140,34 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
     }
   }
 
-  // Setup real-time subscription
+  // Load once, then keep in sync: any change to sessions OR bookings (by anyone) refetches.
   useEffect(() => {
     fetchSessions()
 
-    // Subscribe to real-time changes
     const channel = supabase
-      .channel("sessions-changes")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "sessions",
-        },
-        (payload) => {
-          console.log("Sessions table changed:", payload)
-          fetchSessions() // Refetch when sessions change
-        }
-      )
+      .channel("calendar-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "sessions" }, () => fetchSessions())
+      .on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, () => fetchSessions())
       .subscribe()
 
+    // Safety net if the realtime socket dropped while the tab was in the background
+    const onVisible = () => {
+      if (document.visibilityState === "visible") fetchSessions()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+
     return () => {
+      document.removeEventListener("visibilitychange", onVisible)
       supabase.removeChannel(channel)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Handle event click - admin can edit, parents see details
+  // Handle event click - admin edits the session (and sees who's registered), parents register players
   const handleEventClick = (info: EventClickArg) => {
-    console.log("Event clicked:", info)
     const event = info.event
-    
+
     if (isAdmin) {
-      // For admin: prepare session data for editing
       const sessionData = {
         id: event.id,
         title: event.title,
@@ -195,14 +180,48 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
         price: event.extendedProps.price,
         description: event.extendedProps.description,
       }
-      
+
       setSelectedSession(sessionData)
       setSelectedDate(null) // Clear selected date since we're editing existing session
       setShowSessionModal(true)
     } else {
-      // For parents: show session details (to be implemented later)
-      toast.info(`Session: ${event.title} at ${event.extendedProps.location}`)
+      setBookingSessionId(event.id)
     }
+  }
+
+  const bookingEvent = bookingSessionId ? events.find((e) => e.id === bookingSessionId) : undefined
+  const bookingSession: BookableSession | null = bookingEvent
+    ? {
+        id: bookingEvent.id,
+        title: bookingEvent.title,
+        start: new Date(bookingEvent.start),
+        end: new Date(bookingEvent.end),
+        location: bookingEvent.extendedProps.location,
+        coach_name: bookingEvent.extendedProps.coach_name,
+        skill_level: bookingEvent.extendedProps.skill_level,
+        price: bookingEvent.extendedProps.price,
+        description: bookingEvent.extendedProps.description,
+        max_participants: bookingEvent.extendedProps.max_participants,
+        booked_count: bookingEvent.extendedProps.booked_count,
+        available_spots: bookingEvent.extendedProps.available_spots,
+      }
+    : null
+
+  // Event body: time, title (✓ when this parent is registered) and a registered/capacity count
+  const renderEventContent = (arg: EventContentArg) => {
+    const { booked_count, max_participants, registered } = arg.event.extendedProps
+    return (
+      <div className="flex items-center justify-between gap-1 w-full overflow-hidden">
+        <span className="truncate">
+          {registered && <span className="mr-1">✓</span>}
+          {arg.timeText && <span className="opacity-80 mr-1">{arg.timeText}</span>}
+          {arg.event.title}
+        </span>
+        <span className="shrink-0 opacity-90 text-[11px] font-semibold">
+          {booked_count}/{max_participants}
+        </span>
+      </div>
+    )
   }
 
   // Handle date click - admin can create new sessions
@@ -270,7 +289,7 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
           <p className="text-slate-300">
             {isAdmin 
               ? "Create, edit, and manage academy sessions. Click sessions to edit or dates to create new ones." 
-              : "Choose from our professional coaching sessions"
+              : "Click a session to register your players. Sessions you're registered for are marked ✓."
             }
           </p>
         </div>
@@ -290,6 +309,7 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
                 right: ""
               }}
               events={events}
+              eventContent={renderEventContent}
               eventClick={handleEventClick}
               dateClick={isAdmin ? handleDateClick : undefined}
               editable={isAdmin}
@@ -320,10 +340,25 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
                 <div className="w-4 h-4 bg-red-500 rounded"></div>
                 <span className="text-slate-300">Full</span>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-slate-300 text-xs">Numbers show registered / capacity</span>
+              </div>
             </div>
           </div>
         </CardContent>
       </Card>
+
+      {/* Booking Modal (Parents only) */}
+      {!isAdmin && (
+        <SessionBookingModal
+          open={!!bookingSessionId && !!bookingSession}
+          onClose={() => setBookingSessionId(null)}
+          session={bookingSession}
+          players={players}
+          userId={user.id}
+          onChanged={fetchSessions}
+        />
+      )}
 
       {/* Session Modal (Admin only) */}
       {isAdmin && (
@@ -402,6 +437,10 @@ export function AcademyCalendar({ isAdmin = false }: AcademyCalendarProps) {
           transition: all 0.2s;
         }
         
+        .calendar-container .fc-event-registered {
+          box-shadow: 0 0 0 2px #ffffff inset;
+        }
+
         .calendar-container .fc-event:hover {
           filter: brightness(1.1);
           transform: translateY(-1px);

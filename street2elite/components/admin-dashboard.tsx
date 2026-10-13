@@ -492,7 +492,6 @@ export function AdminDashboard({ user, profile }: AdminDashboardProps) {
           <AcademyCalendar
             user={user}
             profile={profile}
-            playersList={[]}
             isAdmin={true}
           />
         )}

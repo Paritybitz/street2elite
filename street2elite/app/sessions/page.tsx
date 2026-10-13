@@ -35,7 +35,7 @@ export default async function SessionsPage() {
         <AcademyCalendar 
           user={user} 
           profile={profile} 
-          children={children || []} 
+          players={children || []} 
           isAdmin={isAdmin}
         />
       </main>

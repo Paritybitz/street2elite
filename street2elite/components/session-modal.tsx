@@ -26,7 +26,8 @@ import { Badge } from "@/components/ui/badge"
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog"
 import { toast } from "sonner"
 import { Loader2, Trash2, Users } from "lucide-react"
-import { format } from "date-fns"
+import { format, differenceInYears } from "date-fns"
+import { cancelBooking, fetchSessionRoster, type RosterEntry } from "@/lib/bookings"
 
 const sessionSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -54,7 +55,9 @@ export function SessionModal({ open, onClose, session, selectedDate, onSuccess }
   const [showParticipants, setShowParticipants] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
-  const [participants, setParticipants] = useState<any[]>([])
+  const [participants, setParticipants] = useState<RosterEntry[]>([])
+  const [participantToRemove, setParticipantToRemove] = useState<RosterEntry | null>(null)
+  const [isRemoving, setIsRemoving] = useState(false)
   const supabase = createClient()
 
   const {
@@ -80,50 +83,49 @@ export function SessionModal({ open, onClose, session, selectedDate, onSuccess }
     },
   })
 
-  // Fetch participants for existing sessions
+  // Fetch registered players (with parent contact details) for an existing session
   const fetchParticipants = async (sessionId: string) => {
     try {
-      console.log("Fetching participants for session:", sessionId)
-      
-      // Updated query to match your actual database schema
-      const { data: bookings, error } = await supabase
-        .from("bookings")
-        .select(`
-          id,
-          status,
-          child_id,
-          children:child_id (
-            id,
-            first_name,
-            last_name,
-            date_of_birth,
-            parent_id,
-            profiles:parent_id (
-              first_name,
-              last_name,
-              email,
-              phone
-            )
-          )
-        `)
-        .eq("session_id", sessionId)
-        .eq("status", "confirmed")
-
-      if (error) {
-        console.error("Supabase error details:", error)
-        throw error
-      }
-
-      console.log("Bookings with participants:", bookings)
-      setParticipants(bookings || [])
-      
+      setParticipants(await fetchSessionRoster(supabase, sessionId))
     } catch (error: any) {
       console.error("Error fetching participants:", error)
-      console.error("Error message:", error.message)
-      console.error("Error details:", error.details)
-      console.error("Error hint:", error.hint)
-      toast.error(`Failed to load participants: ${error.message || 'Unknown error'}`)
-      setParticipants([]) // Set empty array on error
+      toast.error(`Failed to load participants: ${error.message || "Unknown error"}`)
+      setParticipants([])
+    }
+  }
+
+  // Keep the roster live while the modal is open: anyone registering or cancelling updates it
+  useEffect(() => {
+    const sessionId = session?.id
+    if (!open || !sessionId) return
+
+    const channel = supabase
+      .channel(`session-roster-${sessionId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bookings", filter: `session_id=eq.${sessionId}` },
+        () => fetchParticipants(sessionId)
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, session?.id])
+
+  const handleRemoveParticipant = async () => {
+    if (!participantToRemove) return
+    setIsRemoving(true)
+    try {
+      await cancelBooking(supabase, participantToRemove.id)
+      toast.success("Registration removed")
+      setParticipantToRemove(null)
+      if (session?.id) await fetchParticipants(session.id)
+    } catch (error: any) {
+      toast.error(error.message || "Failed to remove registration")
+    } finally {
+      setIsRemoving(false)
     }
   }
 
@@ -256,64 +258,102 @@ export function SessionModal({ open, onClose, session, selectedDate, onSuccess }
   }
 
   if (showParticipants) {
+    const capacity = session?.max_participants
     return (
-      <Dialog open={open} onOpenChange={onClose}>
-        <DialogContent className="sm:max-w-[600px] bg-slate-800 border-slate-700">
-          <DialogHeader>
-            <DialogTitle className="text-white">
-              Session Participants ({participants.length})
-            </DialogTitle>
-          </DialogHeader>
+      <>
+        <Dialog open={open} onOpenChange={onClose}>
+          <DialogContent className="sm:max-w-[640px] bg-slate-800 border-slate-700">
+            <DialogHeader>
+              <DialogTitle className="text-white">
+                Registered Players ({participants.length}
+                {capacity ? ` / ${capacity}` : ""})
+              </DialogTitle>
+              {session?.title && <p className="text-sm text-slate-400">{session.title}</p>}
+            </DialogHeader>
 
-          <div className="space-y-4 max-h-[400px] overflow-y-auto">
-            {participants.length === 0 ? (
-              <p className="text-slate-400 text-center py-8">No participants registered yet</p>
-            ) : (
-              participants.map((booking) => (
-                <div key={booking.id} className="bg-slate-700/50 rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-medium text-white">
-                        {booking.children?.first_name && booking.children?.last_name 
-                          ? `${booking.children.first_name} ${booking.children.last_name}`
-                          : 'Unknown Player'
-                        }
-                      </h4>
-                      <p className="text-sm text-slate-300">
-                        {booking.children?.date_of_birth ? (
-                          `Age: ${new Date().getFullYear() - new Date(booking.children.date_of_birth).getFullYear()}`
-                        ) : (
-                          'Age: Unknown'
-                        )}
+            <div className="space-y-3 max-h-[420px] overflow-y-auto">
+              {participants.length === 0 ? (
+                <p className="text-slate-400 text-center py-8">No players registered yet</p>
+              ) : (
+                participants.map((entry) => (
+                  <div key={entry.id} className="bg-slate-700/50 rounded-lg p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="font-medium text-white">
+                          {entry.child ? `${entry.child.first_name} ${entry.child.last_name}` : "Unknown Player"}
+                        </h4>
+                        <p className="text-sm text-slate-300">
+                          {entry.child?.date_of_birth
+                            ? `Age ${differenceInYears(new Date(), new Date(entry.child.date_of_birth))}`
+                            : "Age unknown"}
+                          {entry.child?.skill_level && <span className="capitalize"> · {entry.child.skill_level}</span>}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant="outline"
+                          className={
+                            entry.payment_status === "paid"
+                              ? "border-green-500 text-green-400"
+                              : "border-yellow-500 text-yellow-400"
+                          }
+                        >
+                          {entry.payment_status === "paid" ? "Paid" : "Unpaid"}
+                        </Badge>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setParticipantToRemove(entry)}
+                          className="text-red-400 hover:text-red-300 hover:bg-slate-700"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    {entry.parent && (
+                      <div className="mt-2 text-sm text-slate-400">
+                        <p>
+                          Parent: {entry.parent.first_name} {entry.parent.last_name}
+                        </p>
+                        {entry.parent.email && <p>Email: {entry.parent.email}</p>}
+                        {entry.parent.phone && <p>Phone: {entry.parent.phone}</p>}
+                      </div>
+                    )}
+                    {entry.created_at && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        Registered {format(new Date(entry.created_at), "d MMM yyyy, h:mm a")}
                       </p>
-                    </div>
-                    <Badge variant="outline" className="border-green-500 text-green-400">
-                      {booking.status}
-                    </Badge>
+                    )}
                   </div>
-                  {booking.children?.profiles && (
-                    <div className="mt-2 text-sm text-slate-400">
-                      <p>Parent: {booking.children.profiles.first_name} {booking.children.profiles.last_name}</p>
-                      <p>Email: {booking.children.profiles.email}</p>
-                      {booking.children.profiles.phone && <p>Phone: {booking.children.profiles.phone}</p>}
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
+                ))
+              )}
+            </div>
 
-          <DialogFooter>
-            <Button
-              variant="secondary"
-              onClick={() => setShowParticipants(false)}
-              className="bg-slate-700 hover:bg-slate-600 text-white"
-            >
-              Back to Edit
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <DialogFooter>
+              <Button
+                variant="secondary"
+                onClick={() => setShowParticipants(false)}
+                className="bg-slate-700 hover:bg-slate-600 text-white"
+              >
+                Back to Edit
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <ConfirmationDialog
+          open={!!participantToRemove}
+          onOpenChange={(isOpen) => !isOpen && setParticipantToRemove(null)}
+          title="Remove Registration"
+          description={`Remove ${participantToRemove?.child?.first_name ?? "this player"} from this session? Their parent will see the change straight away.`}
+          confirmText="Remove"
+          cancelText="Keep"
+          variant="destructive"
+          onConfirm={handleRemoveParticipant}
+          isLoading={isRemoving}
+        />
+      </>
     )
   }
 
@@ -502,7 +542,7 @@ export function SessionModal({ open, onClose, session, selectedDate, onSuccess }
                     className="flex items-center gap-2 text-white hover:bg-white hover:text-black transition-colors"
                   >
                     <Users className="h-4 w-4" />
-                    View Participants
+                    View Participants{participants.length > 0 ? ` (${participants.length})` : ""}
                   </Button>
                 )}
               </div>
