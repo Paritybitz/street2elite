@@ -38,11 +38,11 @@ const formSchema = z.object({
 interface EditPlayerModalProps {
   open: boolean
   onClose: () => void
-  onPlayerUpdated: () => void
+  onSuccess: (updatedPlayer: any) => void
   player: any
 }
 
-export function EditPlayerModal({ open, onClose, onPlayerUpdated, player }: EditPlayerModalProps) {
+export function EditPlayerModal({ open, onClose, onSuccess, player }: EditPlayerModalProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [selectedPhoto, setSelectedPhoto] = useState<File | null>(null)
   const [selectedMedicalFile, setSelectedMedicalFile] = useState<File | null>(null)
@@ -187,10 +187,24 @@ export function EditPlayerModal({ open, onClose, onPlayerUpdated, player }: Edit
         }
       }
 
+      // Re-read the row so the parent gets the final photo_url etc.
+      const { data: updatedPlayer } = await supabase
+        .from("children")
+        .select("*")
+        .eq("id", player.id)
+        .single()
+
       toast.success("Player updated successfully!")
       handleClose()
-      onPlayerUpdated()
-      
+      onSuccess(
+        updatedPlayer ?? {
+          ...player,
+          first_name: values.fullName.split(" ")[0],
+          last_name: values.fullName.split(" ").slice(1).join(" ") || "",
+          date_of_birth: values.dateOfBirth,
+        }
+      )
+
     } catch (error: any) {
       console.error("Error updating player:", error)
       toast.error(error.message || "Couldn't update player. Please try again.")

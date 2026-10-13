@@ -584,7 +584,7 @@ export function DashboardClient({ user, profile, players: initialPlayers, upcomi
             setShowEditPlayerModal(false)
             setSelectedPlayer(null)
           }}
-          onPlayerUpdated={handlePlayerUpdated}
+          onSuccess={handlePlayerUpdated}
           player={selectedPlayer}
         />
       )}
